@@ -278,8 +278,19 @@ class GuiApp:
         self._calib_evt.set()
         for t in (self._calib_thread, self._status_thread):
             t.join(5)
-        for r in list(getattr(self.viewer, "_renderers", {}).values()):
+        # Stop nerfview's per-client render threads and WAIT for them: a daemon
+        # thread still inside a CUDA call at interpreter exit aborts the process
+        # ("terminate called without an active exception").
+        # Includes threads of already-disconnected clients (nerfview drops them
+        # from _renderers without joining).
+        from nerfview._renderer import Renderer as _NerfviewRenderer
+
+        renderers = [t for t in threading.enumerate() if isinstance(t, _NerfviewRenderer) and t.viewer is self.viewer]
+        for r in renderers:
             r.running = False
+            r._render_event.set()
+        for r in renderers:
+            r.join(5)
         self.coordinator.stop()
         self.server.stop()
         if self.verbose:
