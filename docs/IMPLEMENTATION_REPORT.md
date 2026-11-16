@@ -252,3 +252,34 @@ Scene type: synthetic tracked fixture (`examples/hinged_box`), not a reconstruct
 conda activate parttwin_sim && cd ~/PArtTwin1D && bash scripts/bootstrap_submodules.sh
 source scripts/activate_sim.sh && python -m parttwin1d.cli.gui --config configs/examples/hinged_box.yaml --port 8080
 ```
+
+---
+
+## Addendum — Gaussians inside ManiSkill's own viewer (`parttwin maniskill-gui`)
+
+* **Wiring:** ManiSkill's viewer (`sapien_utils.create_viewer(env._viewer_camera_config)` +
+  `env._setup_viewer()`, i.e. exactly `render_human()`), with a generated SAPIEN shader pack
+  (installed SAPIEN 3.0.3 `default` + patched `composite0.frag`) and a SAPIEN viewer plugin that
+  renders gsplat from the window camera every frame and uploads premultiplied RGBA + depth
+  textures; the composite pass depth-tests them against the SAPIEN gbuffer. Zero frame lag:
+  same camera, same frame.
+* **Verified before building:** custom samplers bind by name via `set_camera_texture`; texture
+  row 0 = top; depth occlusion correct both ways; window camera → OpenCV K/c2w matches a
+  rasterized SAPIEN marker to < 0.5 px. `RenderWindow.set_intrinsic_parameters` gave an
+  inconsistent projection (P00 = 885 for fx = 600 @ 640 px) → not used; calibrated presets use
+  pose + vertical FOV.
+* **Bugs found on the way:** `render_human()` draws before plugins can bind textures (split
+  creation); SAPIEN `select_entity` overrides visibility of the selected link (proxies re-shown
+  and occluding splats) → visibility enforced per frame; TransformWindow UI is lazy → selection
+  deferred to after the first frame.
+* **Tests** (`tests/gui/test_maniskill_viewer.py`, real window, PhysX, gsplat — 7 PASS):
+  ManiSkill viewer + shader pack in use; splats visible in the composited frame; zero-lag
+  camera invariant over 3 camera changes; gsplat depth vs SAPIEN-rasterized door proxy
+  median 8.5 mm / p90 9.8 mm over 55 814 px (proxy face 10 mm in front of splats); proxies
+  occlude / un-occlude; joint motion through our API and through SAPIEN's articulation API
+  both move the splats in the same frame; physics + sweep; orbit **35 fps** at 960×720 with
+  per-frame re-render; export. Unit: shader patch + camera math (3 PASS).
+* **Classical nerfstudio viewer: not integrated** — `pip install nerfstudio` (1.1.5) dry run
+  would downgrade gsplat 1.5.3→1.4.0, numpy 2.4.6→1.26.4, viser 1.1.1→0.2.7.
+
+![](images/maniskill_viewer_q0_q1.2.png)
