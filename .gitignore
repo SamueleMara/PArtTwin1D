@@ -1,10 +1,22 @@
-# Local 3DGS models, large artifacts, simulation outputs
+# Python / tooling
 __pycache__/
+*.py[cod]
 .pytest_cache/
-*.pyc
-outputs/
-assets/
 *.egg-info/
+build/
+dist/
+
+# Run outputs: captures, logs, profiles, GUI exports
+outputs/
+results/
+
+# Large real-object assets (track only README/.gitkeep)
+assets/*
+!assets/README.md
+!assets/.gitkeep
+
+# Quarantined untracked files (manifest is tracked)
+legacy/experiments/quarantine/*
+!legacy/experiments/quarantine/SHA256SUMS
+
 *.mp4
-# Keep small test config / fixture URDF; generated PLYs are not tracked
-examples/hinged_box/*.ply

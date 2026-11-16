@@ -1,11 +1,43 @@
 [build-system]
-requires=["setuptools>=64", "wheel"]
-build-backend="setuptools.build_meta"
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name="parttwin-maniskill-gs-smoke"
-version="0.3.0"
-description="Minimal articulated URDF / per-link 3DGS smoke test for ManiSkill"
-requires-python=">=3.10"
+name = "parttwin1d"
+version = "0.4.0"
+description = "Articulated ManiSkill/PhysX digital twins rendered with per-link 3D Gaussian splats (gsplat), with a live 3D GUI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary (research code); third_party/ submodules keep their own licenses" }
+# Heavy GPU/physics stack (torch, sapien, mani_skill, gsplat, nerfview) is NOT
+# declared here on purpose: it is provided by the existing `parttwin_sim` Conda
+# environment and the pinned third_party/ submodules (editable, --no-deps).
+# See requirements/*.in and requirements/environment.lock.md.
+dependencies = ["numpy", "scipy", "plyfile", "PyYAML", "Pillow"]
+
+[project.optional-dependencies]
+gui = ["viser==1.1.1", "splines", "jaxtyping", "matplotlib"]
+dev = ["pytest>=7", "playwright"]
+
+[project.scripts]
+parttwin = "parttwin1d.cli:main"
+
 [tool.setuptools.packages.find]
-where=["."]
-include=["parttwin_smoke*"]
+where = ["src"]
+include = ["parttwin1d*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+norecursedirs = ["legacy", "third_party", "outputs", "assets", ".git", "*.egg-info"]
+# ROS Jazzy exports pytest11 entry points via PYTHONPATH (Python 3.12 packages)
+# that crash collection in this Python 3.11 env. Block them by name so even a
+# bare `python -m pytest` works; scripts/test.sh additionally sets
+# PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 and unsets PYTHONPATH.
+addopts = "-ra -p no:launch_testing -p no:launch_pytest -p no:launch_ros -p no:ament_copyright -p no:ament_flake8 -p no:ament_lint -p no:ament_xmllint -p no:ament_pep257"
+markers = [
+    "gpu: real CUDA gsplat and/or GPU PhysX (opt-in: PARTTWIN_RUN_GPU_TESTS=1)",
+    "physx: real ManiSkill/SAPIEN PhysX (opt-in: PARTTWIN_RUN_GPU_TESTS=1)",
+    "gui: real browser GUI test (opt-in: PARTTWIN_RUN_GUI_TESTS=1)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,0 +1,18 @@
+# GUI defaults (merged under the object's `viewer:` block; CLI flags win).
+# Conservative for an RTX 4070 Laptop (8 GB).
+host: 127.0.0.1          # never bind public interfaces by default; use SSH forwarding
+port: 8080
+max_resolution: 960      # longest side of the live orbit render
+jpeg_quality: 85         # transport quality for static frames (motion frames use 40)
+playback_hz: 30
+render_mode: rgb         # rgb | alpha | depth | link_id
+depth_min_m: 0.2
+depth_max_m: 4.0
+show_link_frames: true
+show_joint_axes: true
+show_world_axes: true
+show_collision: false
+show_bounding_boxes: false
+show_camera_frusta: true
+show_labels: true
+show_debug_grid: false   # debug-only helper, NOT a 3DGS environment

@@ -1,0 +1,81 @@
+# PArtTwin1D object config, schema v1 — SYNTHETIC FIXTURE (not a calibration).
+# Paths are relative to THIS file. Units: metres, radians.
+# Frames: see docs/coordinate_frames.md  (T_A_B maps frame-B points into frame A).
+schema_version: 1
+object_name: hinged_box
+urdf: ../../examples/hinged_box/model.urdf
+fixed_base: true
+
+# Pose of the URDF root link (base_link) in the simulator world, applied to the
+# articulation builder before PhysX initialisation. Explicit identity here.
+T_world_root:
+  - [1, 0, 0, 0]
+  - [0, 1, 0, 0]
+  - [0, 0, 1, 0]
+  - [0, 0, 0, 1]
+
+links:
+  base_link:
+    ply: ../../examples/hinged_box/base.ply
+    # base.ply is stored directly in base_link coordinates (stated explicitly).
+    T_link_ply:
+      - [1, 0, 0, 0]
+      - [0, 1, 0, 0]
+      - [0, 0, 1, 0]
+      - [0, 0, 0, 1]
+  door_link:
+    ply: ../../examples/hinged_box/door.ply
+    # door.ply is centred on the panel and rotated +90 deg about X
+    # (see examples/hinged_box/generate_fixture.py: DOOR_T_LINK_PLY).
+    T_link_ply:
+      - [1, 0, 0, 0.265]
+      - [0, 0, -1, 0.0]
+      - [0, 1, 0, 0.34]
+      - [0, 0, 0, 1]
+
+initial_q:
+  door_hinge: 0.0
+
+# Synthetic "calibrated" cameras: deliberately fx != fy and an off-centre
+# principal point so exact-K handling is exercised. OpenCV optical c2w.
+cameras:
+  - name: front_oblique
+    width: 640
+    height: 480
+    K: [[600.0, 0.0, 331.5], [0.0, 590.0, 236.0], [0.0, 0.0, 1.0]]
+    T_world_camera:
+      - [0.852601252, 0.192417914, -0.485846118, 1.2]
+      - [0.522562058, -0.313945017, 0.792696299, -1.5]
+      - [0.0, -0.929738604, -0.368220216, 1.05]
+      - [0.0, 0.0, 0.0, 1.0]
+  - name: left_high
+    width: 512
+    height: 384
+    K: [[420.0, 0.0, 250.0], [0.0, 424.0, 190.0], [0.0, 0.0, 1.0]]
+    T_world_camera:
+      - [0.816024481, -0.365443397, 0.447833864, -0.6]
+      - [-0.578017341, -0.51592009, 0.632236044, -1.1]
+      - [0.0, -0.774775829, -0.632236044, 1.5]
+      - [0.0, 0.0, 0.0, 1.0]
+
+render:
+  background_rgb: [1.0, 1.0, 1.0]
+  sh_degree: -1          # all SH degrees present in the PLYs
+  near_plane: 0.01
+  far_plane: 100.0
+  alpha_threshold: 0.01  # depth = NaN where alpha < threshold
+
+viewer:
+  host: 127.0.0.1
+  port: 8080
+  preview_width: 640
+  preview_height: 480
+  max_resolution: 960
+
+sim:
+  backend: physx_cpu
+  sim_freq: 500
+  control_freq: 50
+  drive_stiffness: 40.0
+  drive_damping: 4.0
+  drive_force_limit: 50.0

@@ -1,156 +1,176 @@
-"""Configuration and raw Graphdeco-format 3DGS PLYs; no implicit frame changes."""
+"""Graphdeco (INRIA 3DGS) PLY codec — canonical, immutable, CPU NumPy.
+
+Stored fields (per vertex)::
+
+    x y z                       mean (PLY frame P)
+    opacity                     logit  -> sigmoid on decode
+    scale_0..2                  log    -> exp on decode
+    rot_0..3                    quaternion (w, x, y, z), scalar first, unnormalized
+    f_dc_0..2                   SH degree-0 coefficients (R, G, B)
+    f_rest_0..3*(K-1)-1         channel-major: [R basis 1..K-1, G ..., B ...]
+
+Decoded SH is [N, K, 3] (basis-major, RGB last), the layout gsplat's
+``spherical_harmonics`` expects. All Gaussians are preserved (no subsampling).
+Plain point clouds (x,y,z,red,green,blue) are rejected, never silently splatted.
+"""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
-import json
-import math
+
 import numpy as np
-from .geometry import se3
+
+SH_C0 = 0.28209479177387814
+REQUIRED = ("x", "y", "z", "opacity", "f_dc_0", "f_dc_1", "f_dc_2",
+            "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3")
+
+
+class PLYFormatError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
-class GaussianLink:
-    link: str
+class CanonicalGaussians:
+    """Decoded canonical Gaussians of one link, in that link's PLY frame.
+
+    Arrays are read-only (``flags.writeable = False``).
+    """
+
     path: Path
-    T_link_ply: np.ndarray
+    means: np.ndarray      # [N,3] float32
+    quats: np.ndarray      # [N,4] float32, wxyz, unit
+    scales: np.ndarray     # [N,3] float32, linear (exp of log-scale)
+    opacities: np.ndarray  # [N]   float32, in (0,1)
+    sh: np.ndarray         # [N,K,3] float32
+    sh_degree: int
+
+    @property
+    def count(self) -> int:
+        return int(self.means.shape[0])
+
+    def aabb(self) -> tuple[np.ndarray, np.ndarray]:
+        return self.means.min(0), self.means.max(0)
 
 
-@dataclass(frozen=True)
-class CameraSpec:
-    name: str
-    width: int
-    height: int
-    K: np.ndarray
-    T_world_camera: np.ndarray  # OpenCV optical camera-to-world
-
-
-@dataclass(frozen=True)
-class AssetConfig:
-    source: Path
-    urdf: Path
-    links: tuple[GaussianLink, ...]
-    cameras: tuple[CameraSpec, ...]
-    root_fixed: bool
-    initial_root_pose: np.ndarray
-    render_background: tuple[float, float, float]
-    sh_degree: int  # -1 for all available coefficients
-
-
-def _path(cfg_path: Path, value: str) -> Path:
-    p = Path(value).expanduser()
-    return (cfg_path.parent / p).resolve() if not p.is_absolute() else p.resolve()
-
-
-def load_config(path: str | Path) -> AssetConfig:
-    cfg_path = Path(path).expanduser().resolve()
-    cfg = json.loads(cfg_path.read_text())
-    urdf = _path(cfg_path, cfg["urdf"])
-    if not urdf.is_file():
-        raise FileNotFoundError(f"URDF: {urdf}")
-    specs = []
-    for name, value in cfg["links"].items():
-        if not isinstance(value, dict) or "ply" not in value:
-            raise ValueError(f"links.{name}: must have a PLY path")
-        ply = _path(cfg_path, value["ply"])
-        if not ply.is_file():
-            raise FileNotFoundError(f"links.{name}: {ply}")
-        specs.append(GaussianLink(name, ply, se3(value.get("T_link_ply", np.eye(4)), f"links.{name}.T_link_ply")))
-    if not specs:
-        raise ValueError("Configure at least one Gaussian link")
-    cams = []
-    for idx, c in enumerate(cfg.get("cameras", [])):
-        name = c.get("name", f"camera_{idx}")
-        w, h = int(c["width"]), int(c["height"])
-        K = np.asarray(c["K"], dtype=np.float64)
-        if w <= 0 or h <= 0 or K.shape != (3, 3) or not np.isfinite(K).all():
-            raise ValueError(f"Camera {name}: invalid dimensions or K")
-        if K[0, 0] <= 0 or K[1, 1] <= 0 or not np.allclose(K[2], [0, 0, 1]):
-            raise ValueError(f"Camera {name}: K must have positive fx/fy and homogeneous bottom row")
-        cams.append(CameraSpec(name, w, h, K, se3(c["T_world_camera"], f"cameras.{name}.T_world_camera")))
-    if not cams:
-        raise ValueError("At least one explicit calibrated OpenCV camera is required")
-    bg = tuple(float(v) for v in cfg.get("render", {}).get("background_rgb", [1, 1, 1]))
-    if len(bg) != 3 or any(not 0 <= v <= 1 for v in bg):
-        raise ValueError("render.background_rgb must have three values in [0,1]")
-    degree = int(cfg.get("render", {}).get("sh_degree", -1))
-    if degree < -1 or degree > 3:
-        raise ValueError("SH degree must be -1 or 0..3")
-    return AssetConfig(cfg_path, urdf, tuple(specs), tuple(cams),
-                       bool(cfg.get("fixed_base", True)),
-                       se3(cfg.get("T_world_root", np.eye(4)), "T_world_root"),
-                       bg, degree)
-
-
-def ordered_columns(names, prefix):
+def ordered_columns(names, prefix: str) -> list[str]:
     matched = [v for v in names if v.startswith(prefix)]
     try:
-        vals = sorted(((int(v[len(prefix):]), v) for v in matched))
+        vals = sorted((int(v[len(prefix):]), v) for v in matched)
     except ValueError as exc:
-        raise ValueError(f"Invalid numeric {prefix} suffix") from exc
+        raise PLYFormatError(f"invalid numeric suffix in {prefix}* columns") from exc
     if vals and [x for x, _ in vals] != list(range(len(vals))):
-        raise ValueError(f"{prefix}: columns must be numbered continuously from zero")
+        raise PLYFormatError(f"{prefix}*: columns must be numbered continuously from zero")
     return [v for _, v in vals]
 
 
-def unpack_graphdeco_sh(dc, rest):
-    """Graphdeco f_rest stored channel-major: [R basis, G basis, B basis]."""
-    dc, rest = np.asarray(dc, np.float32), np.asarray(rest, np.float32)
-    if dc.ndim != 2 or dc.shape[-1] != 3 or rest.ndim != 2 or rest.shape[0] != dc.shape[0] or rest.shape[-1] % 3:
-        raise ValueError("SH fields inconsistent")
-    return np.concatenate((dc[:, None, :], rest.reshape(len(dc), 3, -1).transpose(0, 2, 1)), axis=1).copy()
+def unpack_graphdeco_sh(dc, rest) -> np.ndarray:
+    """dc [N,3] + channel-major rest [N,3*(K-1)] -> [N,K,3]."""
+    dc = np.asarray(dc, np.float32)
+    rest = np.asarray(rest, np.float32)
+    if dc.ndim != 2 or dc.shape[1] != 3 or rest.ndim != 2 or rest.shape[0] != dc.shape[0] or rest.shape[1] % 3:
+        raise PLYFormatError(f"SH fields inconsistent: dc {dc.shape}, rest {rest.shape}")
+    n = dc.shape[0]
+    return np.ascontiguousarray(
+        np.concatenate((dc[:, None, :], rest.reshape(n, 3, -1).transpose(0, 2, 1)), axis=1))
 
 
-def load_graphdeco_ply(path, device="cuda", limit=0):
-    """Return canonical tensors; opacity logits and log scales are decoded once.
+def pack_graphdeco_sh(sh) -> tuple[np.ndarray, np.ndarray]:
+    """Inverse of :func:`unpack_graphdeco_sh`."""
+    sh = np.asarray(sh, np.float32)
+    n = sh.shape[0]
+    return sh[:, 0, :], sh[:, 1:, :].transpose(0, 2, 1).reshape(n, -1)
 
-    Accepts original Graphdeco-style fields. Does NOT accept an XYZ/RGB PCD as a
-    Gaussian scene. No automatic scaling, centering, or global pose guessing.
-    """
+
+def _readonly(a):
+    a = np.ascontiguousarray(a)
+    a.flags.writeable = False
+    return a
+
+
+def load_gaussian_ply(path: str | Path) -> CanonicalGaussians:
     from plyfile import PlyData
-    import torch
-    v = PlyData.read(str(path))["vertex"]
+
+    path = Path(path)
+    try:
+        ply = PlyData.read(str(path))
+    except Exception as exc:  # plyfile raises several types
+        raise PLYFormatError(f"{path}: cannot read PLY ({exc})") from exc
+    if "vertex" not in ply:
+        raise PLYFormatError(f"{path}: no 'vertex' element")
+    v = ply["vertex"]
     names = v.data.dtype.names
-    required = ["x", "y", "z", "opacity", *[f"f_dc_{i}" for i in range(3)],
-                *[f"scale_{i}" for i in range(3)], *[f"rot_{i}" for i in range(4)]]
-    missing = sorted(set(required) - set(names))
+    missing = [f for f in REQUIRED if f not in names]
     if missing:
-        raise ValueError(f"{path}: not a 3DGS PLY; missing: {missing}")
-    if len(v) == 0:
-        raise ValueError(f"{path}: empty Gaussian PLY")
-    inds = np.arange(len(v), dtype=np.int64)
-    if limit and len(inds) > limit:
-        inds = np.linspace(0, len(v)-1, int(limit), dtype=np.int64)
+        hint = ""
+        if {"x", "y", "z"} <= set(names) and {"red", "green", "blue"} & set(names):
+            hint = " (looks like a plain colored point cloud, not 3D Gaussians)"
+        raise PLYFormatError(f"{path}: not a Graphdeco 3DGS PLY; missing {missing}{hint}")
+    n = len(v.data)
+    if n == 0:
+        raise PLYFormatError(f"{path}: empty Gaussian PLY")
+
     def cols(fields):
-        return np.stack([np.asarray(v[f])[inds] for f in fields], axis=-1).astype(np.float32)
+        return np.stack([np.asarray(v[f], dtype=np.float32) for f in fields], axis=-1)
+
     means = cols(("x", "y", "z"))
-    logs = cols([f"scale_{i}" for i in range(3)])
-    quats = cols([f"rot_{i}" for i in range(4)])
-    opacity = np.asarray(v["opacity"])[inds].astype(np.float32)
-    dc = cols([f"f_dc_{i}" for i in range(3)])
+    log_scales = cols(("scale_0", "scale_1", "scale_2"))
+    quats = cols(("rot_0", "rot_1", "rot_2", "rot_3"))
+    opacity_logit = np.asarray(v["opacity"], dtype=np.float32)
     rest_names = ordered_columns(names, "f_rest_")
-    rest = cols(rest_names) if rest_names else np.zeros((len(inds), 0), dtype=np.float32)
-    sh = unpack_graphdeco_sh(dc, rest)
-    basis = sh.shape[1]
-    degree = math.isqrt(basis)-1
-    if degree not in (0, 1, 2, 3) or (degree+1)**2 != basis:
-        raise ValueError(f"{path}: invalid SH basis count {basis}; expected 1,4,9,16")
-    for name, a in (("means", means), ("logscales", logs), ("quats", quats), ("opacities", opacity), ("sh", sh)):
+    rest = cols(rest_names) if rest_names else np.zeros((n, 0), np.float32)
+    sh = unpack_graphdeco_sh(cols(("f_dc_0", "f_dc_1", "f_dc_2")), rest)
+    k = sh.shape[1]
+    degree = math.isqrt(k) - 1
+    if degree not in (0, 1, 2, 3) or (degree + 1) ** 2 != k:
+        raise PLYFormatError(f"{path}: {k} SH bases per channel; expected 1, 4, 9 or 16")
+    for nm, a in (("means", means), ("scale", log_scales), ("rot", quats),
+                  ("opacity", opacity_logit), ("SH", sh)):
         if not np.isfinite(a).all():
-            raise ValueError(f"{path}: non-finite {name}")
-    if (np.linalg.norm(quats, axis=-1) < 1e-8).any():
-        raise ValueError(f"{path}: zero-norm Gaussian quaternion")
-    # Very large log-scales overflow exp; fail rather than silently altering geometry.
-    if (logs > 50).any() or (logs < -50).any():
-        raise ValueError(f"{path}: implausible Gaussian log-scale outside [-50,50]")
-    t = lambda a: torch.as_tensor(np.ascontiguousarray(a), dtype=torch.float32, device=device)
-    quats_t = t(quats)
-    return {
-        "means": t(means),
-        "quats": torch.nn.functional.normalize(quats_t, dim=-1),
-        "scales": t(np.exp(logs)),
-        "opacities": torch.sigmoid(t(opacity)),
-        "sh": t(sh),
-        "degree": degree,
-        "count": len(inds),
+            raise PLYFormatError(f"{path}: non-finite {nm} values")
+    qn = np.linalg.norm(quats, axis=-1, keepdims=True)
+    if (qn < 1e-8).any():
+        raise PLYFormatError(f"{path}: {(qn < 1e-8).sum()} zero-norm Gaussian quaternion(s)")
+    if (np.abs(log_scales) > 50).any():
+        raise PLYFormatError(f"{path}: implausible log-scale outside [-50, 50]")
+    return CanonicalGaussians(
+        path=path,
+        means=_readonly(means),
+        quats=_readonly((quats / qn).astype(np.float32)),
+        scales=_readonly(np.exp(log_scales).astype(np.float32)),
+        opacities=_readonly((1.0 / (1.0 + np.exp(-opacity_logit))).astype(np.float32)),
+        sh=_readonly(sh),
+        sh_degree=degree,
+    )
+
+
+def write_gaussian_ply(path: str | Path, means, quats_wxyz, scales, opacities, sh, binary: bool = True) -> Path:
+    """Write activated parameters back to a Graphdeco PLY (inverse activations)."""
+    from plyfile import PlyData, PlyElement
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    means = np.asarray(means, np.float32)
+    n = len(means)
+    sh = np.asarray(sh, np.float32).reshape(n, -1, 3)
+    dc, rest = pack_graphdeco_sh(sh)
+    op = np.clip(np.asarray(opacities, np.float64), 1e-7, 1 - 1e-7)
+    fields = {
+        "x": means[:, 0], "y": means[:, 1], "z": means[:, 2],
+        "opacity": np.log(op / (1 - op)).astype(np.float32),
     }
+    for i in range(3):
+        fields[f"f_dc_{i}"] = dc[:, i]
+    for i in range(rest.shape[1]):
+        fields[f"f_rest_{i}"] = rest[:, i]
+    ls = np.log(np.asarray(scales, np.float64)).astype(np.float32)
+    for i in range(3):
+        fields[f"scale_{i}"] = ls[:, i]
+    q = np.asarray(quats_wxyz, np.float32)
+    for i in range(4):
+        fields[f"rot_{i}"] = q[:, i]
+    arr = np.empty(n, dtype=[(k, "f4") for k in fields])
+    for k, val in fields.items():
+        arr[k] = val
+    PlyData([PlyElement.describe(arr, "vertex")], text=not binary).write(str(path))
+    return path

@@ -1,0 +1,4 @@
+pytest==9.2.0
+# Browser GUI tests drive the SYSTEM Google Chrome (channel="chrome"); no
+# `playwright install` browser download is needed when /usr/bin/google-chrome exists.
+playwright==1.65.2
