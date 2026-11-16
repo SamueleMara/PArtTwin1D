@@ -1,0 +1,16 @@
+# Runtime of the parttwin1d package inside the EXISTING `parttwin_sim` env.
+# DO NOT `pip install -r` the heavy entries blindly: torch/sapien are already
+# installed and verified; mani_skill/gsplat come from third_party/ submodules.
+#
+# Provided by the environment (verified, do not reinstall):
+#   torch==2.11.0+cu128         (CUDA 12.8 wheel)
+#   sapien==3.0.3               (binary wheel; no source submodule on purpose)
+# Provided by pinned submodules (pip install --no-deps -e third_party/<name>):
+#   mani_skill==3.0.1           third_party/ManiSkill @ a4a4f92
+#   gsplat==1.5.3               third_party/gsplat    @ 937e299  (BUILD_NO_CUDA=1; JIT-compiled once)
+# Pure-Python runtime deps (already present in parttwin_sim at these versions):
+numpy==2.4.6
+scipy==1.17.1
+plyfile==1.1.5
+PyYAML==6.0.3
+pillow==13.0.0

@@ -1,114 +1,139 @@
-#!/usr/bin/env python3
-"""Render an existing articulated URDF + per-link 3DGS using real ManiSkill link poses.
+"""Offline kinematic joint sweep: real ManiSkill link poses -> gsplat -> files.
 
-This is a deterministic pose-sequence integration benchmark, *not* a replacement
-for physics stepping, collision geometry, force learning, or PPO.
+    python -m parttwin1d.cli.render --config configs/examples/hinged_box.yaml \
+        --joint door_hinge --q-start 0 --q-end 1.3 --frames 20 --out outputs/hinged_box
 
-Usage (from PArtTwin1D repo root):
- python scripts/render_articulated.py --config configs/hinged_box.json \
-     --joint door_hinge --q-start 0 --q-end 1.3 --frames 20
+Writes per camera and frame: RGB PNG, alpha PNG, depth .npy, arrays .npz,
+metadata JSON (K, c2w, w2c, q, T_world_link), plus a GIF per camera and
+``report.json`` with geometric consistency checks and render timing
+(compile/first-frame vs steady state). This is a kinematic pose sweep, not a
+physics trajectory.
 """
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+import time
+from pathlib import Path
+
 import numpy as np
-from PIL import Image
-
-# Allow running directly in an existing git checkout: no pip editable install.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from parttwin1d.sim.assets import load_config
-from parttwin1d.sim.env import create_articulated_scene, set_joint_qpos
-from parttwin1d.sim.renderer import ArticulatedGaussianRenderer
 
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--config", required=True, type=Path, help="URDF / Gaussian PLY / camera JSON")
-    p.add_argument("--joint", help="Active URDF joint name; optional only for single-DOF objects")
+def build_parser():
+    p = argparse.ArgumentParser(prog="parttwin render", description=__doc__.splitlines()[0])
+    p.add_argument("--config", required=True)
+    p.add_argument("--joint", help="active joint to sweep (optional for 1-DoF objects)")
     p.add_argument("--q-start", type=float, default=None)
     p.add_argument("--q-end", type=float, default=None)
     p.add_argument("--frames", type=int, default=24)
-    p.add_argument("--out", type=Path, default=Path("outputs/hinged_box"))
-    p.add_argument("--sim-backend", choices=("physx_cpu", "physx_cuda"), default="physx_cpu")
-    p.add_argument("--max-gaussians-per-link", type=int, default=0,
-                   help="Only for performance troubleshooting; 0 uses all Gaussians")
-    return p.parse_args()
+    p.add_argument("--out", type=Path, default=Path("outputs/render"))
+    p.add_argument("--sim-backend", choices=("physx_cpu", "physx_cuda"), default=None)
+    p.add_argument("--camera", action="append", help="calibrated camera name(s); default all")
+    p.add_argument("--segmentation", action="store_true", help="also export the link-ID pass")
+    return p
 
 
-def get_joint(art, name, qstart, qend):
-    names = [j.name for j in art.get_active_joints()]
-    if not names:
-        raise ValueError("URDF has no movable joints")
-    if name is None:
-        if len(names) != 1:
-            raise ValueError(f"Pass --joint; active joints: {names}")
-        name = names[0]
-    if name not in names:
-        raise ValueError(f"Unknown joint {name!r}. Available active joints: {names}")
-    i = names.index(name)
-    lower, upper = art.qlimits[0, i, :].detach().cpu().tolist()
-    if not np.isfinite([lower, upper]).all():
-        raise ValueError(f"Joint {name}: finite URDF joint limits required for this sequence driver")
-    return name, float(lower if qstart is None else qstart), float(upper if qend is None else qend), names
-
-
-def run(args):
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
     if args.frames < 2:
-        raise ValueError("--frames must be >= 2")
-    config = load_config(args.config)
+        raise SystemExit("--frames must be >= 2")
+    from ..config import load_config
+    from ..evaluation.consistency import expected_child_pose, pose_error, static_link_invariance
+    from ..evaluation.profiling import profile_render
+    from ..rendering.cameras import RenderCamera
+    from ..rendering.gsplat_backend import ArticulatedGaussianRenderer
+    from ..rendering.observations import export_result, rgb_uint8, save_gif
+    from ..sim.articulation import ArticulationDriver
+    from ..sim.env import create_env
+
+    cfg = load_config(args.config)
+    cams = [RenderCamera.from_spec(c) for c in cfg.cameras if not args.camera or c.name in args.camera]
+    if not cams:
+        raise SystemExit("no calibrated cameras selected (config 'cameras' / --camera)")
     args.out.mkdir(parents=True, exist_ok=True)
-    env = create_articulated_scene(config, args.sim_backend)
+    t0 = time.perf_counter()
+    env = create_env(cfg, args.sim_backend)
     try:
         env.reset(seed=0)
-        art = env.twin
-        name, qstart, qend, all_joints = get_joint(art, args.joint, args.q_start, args.q_end)
-        print(f"Imported {config.urdf.name} | links={sorted(art.links_map)} | joints={all_joints}", flush=True)
-        renderer = ArticulatedGaussianRenderer(config, max_gaussians_per_link=args.max_gaussians_per_link)
-        renderer.validate_links(art, config.links)
-        print(f"Loaded {renderer.gaussian_count} Gaussians across {len(config.links)} URDF links", flush=True)
-        report = {"config": str(config.source), "urdf": str(config.urdf), "joint": name,
-                  "q_start": qstart, "q_end": qend, "frames": args.frames,
-                  "sim_backend": args.sim_backend, "gaussians": renderer.gaussian_count,
-                  "camera_convention": "T_world_camera, OpenCV optical", "sequence": []}
-        all_frames = {camera.name: [] for camera in config.cameras}
-        q_values = np.linspace(qstart, qend, args.frames)
-        for frame_idx, q in enumerate(q_values):
-            qpos = set_joint_qpos(env, name, float(q))
-            fdata = {"index": frame_idx, "qpos": qpos, "cameras": {}}
-            for camera in config.cameras:
-                result = renderer.render_numpy(art, camera)
-                image = Image.fromarray(result["rgb"], "RGB")
-                img_dir = args.out / camera.name
-                img_dir.mkdir(exist_ok=True, parents=True)
-                image.save(img_dir / f"rgb_{frame_idx:04d}.png")
-                np.savez_compressed(img_dir / f"depth_alpha_{frame_idx:04d}.npz",
-                                    depth_m=result["depth_m"], alpha=result["alpha"])
-                all_frames[camera.name].append(image)
-                fdata["cameras"][camera.name] = {
-                    "alpha_pixels": int((result["alpha"] > 0.01).sum()),
-                    "T_world_ply": result["T_world_ply"],
-                }
-            report["sequence"].append(fdata)
-            print(f"frame {frame_idx+1}/{len(q_values)} joint={q:.5f}", flush=True)
-        for camera in config.cameras:
-            frames = all_frames[camera.name]
-            frames[0].save(args.out / f"{camera.name}.gif", save_all=True,
-                           append_images=frames[1:], duration=120, loop=0)
-            first, last = (np.asarray(frames[0], np.float32), np.asarray(frames[-1], np.float32))
-            mad = float(np.abs(first-last).mean())
-            report.setdefault("image_mean_absolute_change", {})[camera.name] = mad
-            print(f"{camera.name}: first-last mean RGB absolute change = {mad:.3f}", flush=True)
-            if mad < 1.0:
-                print(f"WARNING: {camera.name} barely changed; check joint-to-PLY binding and camera", flush=True)
+        drv = ArticulationDriver(env, cfg)
+        names = [j.name for j in drv.joints]
+        if not names:
+            raise SystemExit("URDF has no movable joints")
+        jname = args.joint or (names[0] if len(names) == 1 else None)
+        if jname is None or jname not in names:
+            raise SystemExit(f"--joint required; active joints: {names}")
+        j = drv.joints[drv.joint_index[jname]]
+        qs = j.lower if args.q_start is None else args.q_start
+        qe = j.upper if args.q_end is None else args.q_end
+        if not np.isfinite([qs, qe]).all():
+            raise SystemExit(f"{jname}: finite --q-start/--q-end required (unbounded joint)")
+        print(f"[render] {cfg.urdf.name}: links {sorted(env.twin.links_map)}, active joints {names}", flush=True)
+        t_sim = time.perf_counter() - t0
+        t1 = time.perf_counter()
+        renderer = ArticulatedGaussianRenderer.from_config(cfg)
+        renderer.bind_articulation(env.twin)
+        print(f"[render] loaded {renderer.gaussian_count} Gaussians across {len(cfg.links)} links "
+              f"(SH degree {renderer.sh_degree}); gsplat ext {renderer.extension_path}", flush=True)
+        t_load = time.perf_counter() - t1
+
+        snaps, frames = [], {c.name: [] for c in cams}
+        q_values = np.linspace(qs, qe, args.frames)
+        drv.set_joint_kinematic(jname, float(q_values[0]))
+        s0 = drv.snapshot("kinematic")
+        renderer.update_from_snapshot(s0)
+        t2 = time.perf_counter()
+        renderer.render(cams[0])  # first real kernel launch (lazy CUDA init / allocator)
+        first_ms = (time.perf_counter() - t2) * 1e3
+        print(f"[render] first rasterization {first_ms:.1f} ms", flush=True)
+        for i, q in enumerate(q_values):
+            drv.set_joint_kinematic(jname, float(q))
+            s = drv.snapshot("kinematic")
+            snaps.append(s)
+            renderer.update_from_snapshot(s)
+            for cam in cams:
+                res = renderer.render(cam, segmentation=args.segmentation).validate()
+                if int(res.valid.sum()) == 0:
+                    print(f"WARNING: frame {i} camera {cam.name}: no visible alpha", flush=True)
+                export_result(res, args.out / cam.name, f"{i:04d}", {"camera_kind": "calibrated exact K"})
+                frames[cam.name].append(rgb_uint8(res.rgb.detach().cpu().numpy()))
+            print(f"[render] frame {i + 1}/{len(q_values)} {jname}={q:.5f} {j.unit}", flush=True)
+
+        # Geometric checks against the analytic joint motion (single joint sweep).
+        uj = drv.urdf.joints[jname]
+        T0 = snaps[0].T_world_link[uj.child] if uj.child in snaps[0].T_world_link else None
+        checks = {}
+        if T0 is not None:
+            errs = [pose_error(expected_child_pose(T0, uj, float(s.q[j.index]), float(snaps[0].q[j.index])),
+                               s.T_world_link[uj.child]) for s in snaps]
+            checks["moving_link_max_translation_err_m"] = max(e[0] for e in errs)
+            checks["moving_link_max_rotation_err_rad"] = max(e[1] for e in errs)
+        static = [b.link for b in cfg.links if b.link != uj.child and drv.urdf.joint_for_child(b.link) is None]
+        for link in static:
+            tr, rot = static_link_invariance(snaps, link)
+            checks[f"static_{link}_max_translation_m"] = tr
+            checks[f"static_{link}_max_rotation_rad"] = rot
+        report = {"config": str(cfg.source), "urdf": str(cfg.urdf), "joint": jname, "unit": j.unit,
+                  "q_start": qs, "q_end": qe, "frames": args.frames, "sim_backend": args.sim_backend or cfg.sim.backend,
+                  "gaussians": renderer.gaussian_count, "sh_degree": renderer.sh_degree,
+                  "timing_s": {"scene_setup": t_sim, "ply_load_upload": t_load}, "first_render_ms": first_ms,
+                  "checks": checks, "cameras": {}, "sequence": [s.to_json() for s in snaps]}
+        for cam in cams:
+            fr = frames[cam.name]
+            save_gif(fr, args.out / f"{cam.name}.gif", 120)
+            mad = float(np.abs(fr[0].astype(np.float32) - fr[-1].astype(np.float32)).mean())
+            report["cameras"][cam.name] = {"first_last_mean_abs_rgb_change_0_255": mad,
+                                          "profile": profile_render(renderer, cam, n_warmup=5, n_frames=30),
+                                          **cam.to_json()}
+            print(f"[render] {cam.name}: first-last mean |ΔRGB| = {mad:.2f}/255; "
+                  f"steady {report['cameras'][cam.name]['profile']['steady_median_ms']:.2f} ms", flush=True)
         (args.out / "report.json").write_text(json.dumps(report, indent=2))
-        print(f"Rendered RGB, alpha/depth, per-link poses and GIF to {args.out.resolve()}", flush=True)
+        print(f"[render] checks: {json.dumps(checks)}", flush=True)
+        print(f"[render] wrote {args.out.resolve()}", flush=True)
     finally:
         env.close()
+    return 0
 
 
 if __name__ == "__main__":
-    run(parse_args())
+    sys.exit(main())

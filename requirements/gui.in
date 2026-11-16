@@ -1,0 +1,5 @@
+# Live GUI. nerfview itself comes from third_party/nerfview @ 4538024 (--no-deps -e).
+# viser 1.1.1 is the verified frontend/server (nerfview requires viser>=0.2.1).
+viser==1.1.1
+splines==0.3.3        # imported by nerfview.render_panel
+# already present in parttwin_sim: jaxtyping==0.3.11 matplotlib==3.11.2 imageio==2.38.2

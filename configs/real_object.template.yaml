@@ -1,0 +1,58 @@
+# TEMPLATE for a real articulated object — schema v1.
+# EVERY numeric value below is a placeholder and MUST be replaced with values
+# read from your own exports (URDF, per-link 3DGS PLYs, camera calibration).
+# Do not copy these numbers into a real experiment. Run
+#   parttwin inspect --config <your file>
+# for a field-by-field diagnostic before launching the GUI.
+schema_version: 1
+object_name: YOUR_OBJECT
+urdf: ../assets/YOUR_OBJECT/model.urdf     # relative to this file
+fixed_base: true
+
+# T_{W<-root}: URDF root link pose in the simulator world (metres).
+T_world_root:
+  - [1, 0, 0, 0]
+  - [0, 1, 0, 0]
+  - [0, 0, 1, 0]
+  - [0, 0, 0, 1]
+
+links:
+  base_link:                                # must be a URDF <link name>
+    ply: ../assets/YOUR_OBJECT/base.ply     # Graphdeco 3DGS PLY (metric units)
+    # T_{L<-P}: PLY frame -> URDF link frame. If the PLY is in capture-world
+    # coordinates at reference q0, derive it algebraically:
+    #   T_L_P = T_W_L(q0)^-1 @ T_W_Wc @ T_Wc_P   (parttwin1d.assets.frame_alignment)
+    T_link_ply:
+      - [1, 0, 0, 0]
+      - [0, 1, 0, 0]
+      - [0, 0, 1, 0]
+      - [0, 0, 0, 1]
+  moving_link:
+    ply: ../assets/YOUR_OBJECT/moving.ply
+    T_link_ply:
+      - [1, 0, 0, 0]
+      - [0, 1, 0, 0]
+      - [0, 0, 1, 0]
+      - [0, 0, 0, 1]
+
+initial_q: {}          # joint_name: value (rad | m); default 0 clipped to limits
+
+cameras:               # optional; rectified pinhole, zero skew, no distortion
+  - name: cam_000
+    width: 640
+    height: 480
+    K: [[600.0, 0.0, 320.0], [0.0, 600.0, 240.0], [0.0, 0.0, 1.0]]
+    # OpenCV optical camera-to-world T_{W<-C} (+X right, +Y down, +Z forward)
+    T_world_camera:
+      - [1, 0, 0, 0]
+      - [0, 1, 0, 0]
+      - [0, 0, 1, -1]
+      - [0, 0, 0, 1]
+
+render:
+  background_rgb: [1.0, 1.0, 1.0]
+  sh_degree: -1
+viewer:
+  port: 8080
+  preview_width: 640
+  preview_height: 480

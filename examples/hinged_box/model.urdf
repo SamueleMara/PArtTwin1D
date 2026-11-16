@@ -1,13 +1,28 @@
 <?xml version="1.0"?>
-<robot name="smoke_door">
- <link name="base_link"><inertial><mass value="5"/><origin xyz="0.25 0 0.33"/><inertia ixx="0.18" iyy="0.18" izz="0.1" ixy="0" ixz="0" iyz="0"/></inertial>
-  <collision><origin xyz="0 0 0.33"/><geometry><box size="0.04 0.04 0.68"/></geometry></collision>
- </link>
- <link name="door_link"><inertial><mass value="1"/><origin xyz="0.25 0 0.325"/><inertia ixx="0.04" iyy="0.04" izz="0.02" ixy="0" ixz="0" iyz="0"/></inertial>
-  <collision><origin xyz="0.25 0 0.325"/><geometry><box size="0.5 0.02 0.65"/></geometry></collision>
- </link>
- <joint name="door_hinge" type="revolute"><parent link="base_link"/><child link="door_link"/>
-  <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 0 1"/>
-  <limit lower="0" upper="1.57" effort="20" velocity="1.5"/><dynamics damping="0.1" friction="0.01"/>
- </joint>
+<!-- Deterministic two-link hinged-box FIXTURE (synthetic, not a reconstruction).
+     Units: metres, radians. Base frame: z up. Door hinge: +z axis through the
+     base origin; positive q opens the door from +x towards +y. -->
+<robot name="hinged_box">
+  <link name="base_link">
+    <inertial><origin xyz="0.26 -0.03 0.34"/><mass value="5.0"/>
+      <inertia ixx="0.2" iyy="0.2" izz="0.12" ixy="0" ixz="0" iyz="0"/></inertial>
+    <!-- left post (hinge side), right post, bottom rail, top rail: y = -0.03 plane -->
+    <collision><origin xyz="0.0 -0.03 0.34"/><geometry><box size="0.03 0.03 0.71"/></geometry></collision>
+    <collision><origin xyz="0.52 -0.03 0.34"/><geometry><box size="0.03 0.03 0.71"/></geometry></collision>
+    <collision><origin xyz="0.26 -0.03 0.0"/><geometry><box size="0.55 0.03 0.03"/></geometry></collision>
+    <collision><origin xyz="0.26 -0.03 0.68"/><geometry><box size="0.55 0.03 0.03"/></geometry></collision>
+    <!-- RGB axis-triad marker block: triad origin (-0.15, 0, 0), arms 0.15 m along +X/+Y/+Z -->
+    <collision><origin xyz="-0.08 0.07 0.07"/><geometry><box size="0.18 0.18 0.18"/></geometry></collision>
+  </link>
+  <link name="door_link">
+    <inertial><origin xyz="0.265 0 0.34"/><mass value="1.0"/>
+      <inertia ixx="0.035" iyy="0.06" izz="0.025" ixy="0" ixz="0" iyz="0"/></inertial>
+    <collision><origin xyz="0.265 0 0.34"/><geometry><box size="0.48 0.02 0.64"/></geometry></collision>
+  </link>
+  <joint name="door_hinge" type="revolute">
+    <parent link="base_link"/><child link="door_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.57" effort="20" velocity="1.5"/>
+    <dynamics damping="0.1" friction="0.01"/>
+  </joint>
 </robot>
