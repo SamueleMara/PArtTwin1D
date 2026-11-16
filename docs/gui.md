@@ -38,6 +38,13 @@ Mouse: left-drag orbit, right-drag (or shift) pan, wheel zoom.
   vertical FOV, but it is still the virtual K.
 * Frames are JPEG-compressed for transport (quality 70 static / 40 while
   moving); numeric parity with the offline renderer is tested before JPEG.
+* The splats are rendered on the server, so during an orbit the image trails the
+  browser-drawn overlays by one round trip. Measured camera update → frame sent:
+  **≈12 ms median, 15 ms p90** at 960×853 (`tests/gui::test_camera_motion_latency`).
+  To keep this low, colour conversion runs on the GPU (only uint8 is copied to the
+  host) and the depth map used to occlude overlays (≈10 ms PNG encode per frame in
+  viser) is sent only with nerfview's settled high-quality frame, ~0.2 s after
+  motion stops. While the camera moves, overlays draw on top of the splats.
 * Shared state: articulation q is shared by all browsers; cameras are per browser.
 * The headless/software-WebGL warning shown by viser in VMs only affects the
   browser's overlay drawing, not the server-side gsplat render.

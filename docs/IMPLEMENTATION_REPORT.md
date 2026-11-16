@@ -131,7 +131,7 @@ removed `parttwin-maniskill-gs-smoke`; wheels `gsplat`/`mani_skill` → editable
 | `python -m parttwin1d.cli.inspect --config configs/examples/hinged_box.yaml` | 0 errors, 0 warnings | 0 | 0.5 s | `final_inspect.log` |
 | `PARTTWIN_RUN_GPU_TESTS=1 python -m pytest -v tests/integration` | **28 passed** | 0 | 34.2 s | `final_integration.log` |
 | `python -m parttwin1d.cli.render … --frames 20 --out outputs/hinged_box` | 20 frames × 2 cameras | 0 | 10.1 s | `final_render.log`, `outputs/hinged_box/report.json` |
-| `PARTTWIN_RUN_GUI_TESTS=1 python -m pytest -v tests/gui` | **11 passed** | 0 | 50.0 s | `final_gui_tests.log`, `outputs/test_artifacts/gui_*.png` |
+| `PARTTWIN_RUN_GUI_TESTS=1 python -m pytest -v tests/gui` | **12 passed** (incl. latency guard) | 0 | 50.0 s | `final_gui_tests.log`, `outputs/test_artifacts/gui_*.png` |
 | `python -m parttwin1d.cli.gui --config … --port 8080` (manual) | served, Ctrl+C → "shut down cleanly" | 0 | — | `outputs/logs/gui_manual.log` |
 
 ### 3a. Unit tests (CPU) — 71 PASS
@@ -175,7 +175,7 @@ Gaussians bit-identical, door Gaussians move > 0.3 m, return to q0 bit-identical
 `test_gui_callback_equals_offline_render` (pre-JPEG, bit-identical), `test_profile_steady_state`,
 `test_render_cli_sweep[physx_cpu|physx_cuda]` (GPU PhysX + gsplat in one process).
 
-### 3d. GUI tests in a real browser — 11 PASS (headless system Chrome 152 via Playwright, live server)
+### 3d. GUI tests in a real browser — 12 PASS (headless system Chrome 152 via Playwright, live server)
 
 live Gaussian RGB visible in the browser canvas (red-door pixel count) · mouse orbit, right-drag pan, wheel zoom
 each produce a **new** gsplat render with a new c2w (same snapshot revision); viewport resize ⇒ new virtual K ·
@@ -223,6 +223,7 @@ headless/VM browsers concerns only the browser's overlay drawing.
 | Steady state 640×480 + link-ID channels | median 1.46 ms (≈685 fps), peak 33.8 MB |
 | Steady state 1280×960 | median 1.91 ms (≈523 fps), peak 62.0 MB |
 | GUI frame (960×776 incl. device→host copy, colouring) | 3–7 ms per render; delivered via JPEG websocket |
+| GUI orbit latency, camera update → frame sent (real Chrome drag) | **11.6 ms median / 15.4 ms p90 at 960×853** (follow-up fix; was 53.5 / 73.5 ms at ≈700×630 — CPU post-processing ×2 and a ≈10 ms depth-PNG encode on every motion frame) |
 | Per-link alignment (Gaussian means inside URDF collision primitives) | base 100.0 %, door 100.0 % |
 | Kinematic pose error (see §3b) | ≤ 4.7e-7 rad, ≤ 2.2e-7 m |
 

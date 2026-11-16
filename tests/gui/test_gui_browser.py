@@ -178,6 +178,50 @@ def test_orbit_pan_zoom_trigger_new_gsplat_renders(app, page):
     screenshot(page, "after_orbit", app)
 
 
+def test_camera_motion_latency(app, page):
+    """Orbit responsiveness: camera update -> frame sent, measured server-side during a real drag.
+    Regression guard for the CPU post-processing / per-frame depth-PNG cost (was ~54 ms median)."""
+    import statistics
+
+    cid = client_ids(app)[0]
+    client = app.server.get_clients()[cid]
+    cam_t, lat, res = [], [], []
+    client.camera.on_update(lambda c: cam_t.append(time.perf_counter()))
+    orig = client.scene.set_background_image
+
+    def timed(*a, **k):
+        t = time.perf_counter()
+        orig(*a, **k)
+        now = time.perf_counter()
+        pend = [c for c in cam_t if c < t]
+        if pend:
+            lat.append((now - min(pend)) * 1e3)
+            cam_t[:] = [c for c in cam_t if c >= t]
+        res.append(a[0].shape[:2])
+
+    client.scene.set_background_image = timed
+    try:
+        box = page.locator("canvas").first.bounding_box()
+        cx, cy = box["x"] + 400, box["y"] + 400
+        page.mouse.move(cx, cy)
+        page.mouse.down()
+        for i in range(80):
+            page.mouse.move(cx + 250 * np.sin(i / 15), cy + 50 * np.cos(i / 12))
+            time.sleep(1 / 60)
+        page.mouse.up()
+        settle(app)
+    finally:
+        del client.scene.set_background_image
+    assert len(lat) > 20, len(lat)
+    med = statistics.median(lat)
+    ART.mkdir(parents=True, exist_ok=True)
+    (ART / "gui_latency.json").write_text(json.dumps({"camera_to_frame_ms_median": med,
+                                                     "p90": sorted(lat)[int(0.9 * len(lat))], "frames": len(lat),
+                                                     "resolutions": sorted({tuple(r) for r in res})}, indent=2))
+    assert med < 30.0, f"camera->frame latency median {med:.1f} ms"
+    assert max(h for h, w in res) >= 700  # no resolution collapse while moving
+
+
 def test_joint_slider_moves_hinge_without_drift(app, page):
     from parttwin1d.evaluation.consistency import expected_child_pose, pose_error
 

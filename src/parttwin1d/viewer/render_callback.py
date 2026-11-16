@@ -24,9 +24,10 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
+import torch
 
 from ..rendering.cameras import RenderCamera
-from ..rendering.observations import depth_colormap, link_id_image, rgb_uint8
+from ..rendering.observations import depth_colormap, link_id_image
 
 try:  # resolved at import so the isinstance check is cheap
     from nerfview._renderer import InterruptRenderException
@@ -114,22 +115,26 @@ class ViewerRenderCallback:
             self.renderer.update_from_snapshot(snap)
             opt = self.options
             res = self.renderer.render(cam, segmentation=(opt.mode == "link_id"), sh_degree=opt.sh_degree)
-            rgb = res.rgb.detach().cpu().numpy()
-            depth = res.depth.detach().cpu().numpy()
+            # Hot path: convert on the GPU and copy only uint8 to the host
+            # (same formula as observations.rgb_uint8, bit-identical in float32).
+            rgb8 = (res.rgb.clamp(0.0, 1.0) * 255.0 + 0.5).to(torch.uint8).cpu().numpy()
             if opt.mode == "rgb":
-                img = rgb_uint8(rgb)
+                img = rgb8
             elif opt.mode == "alpha":
-                a = (np.clip(res.alpha.detach().cpu().numpy(), 0, 1) * 255).astype(np.uint8)
-                img = np.repeat(a[..., None], 3, -1)
+                a = (res.alpha.clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+                img = a[..., None].expand(-1, -1, 3).contiguous().cpu().numpy()
             elif opt.mode == "depth":
+                depth = res.depth.cpu().numpy()
                 img = _with_colorbar(depth_colormap(depth, opt.depth_min, opt.depth_max), opt.depth_min, opt.depth_max)
             elif opt.mode == "link_id":
-                img = link_id_image(res.link_id.detach().cpu().numpy())
+                img = link_id_image(res.link_id.cpu().numpy())
             else:
                 raise ValueError(f"unknown render mode {opt.mode}")
-            visible = int(np.isfinite(depth).sum())
-            # nerfview renders each browser client from its own Renderer thread (has .client)
-            client = getattr(threading.current_thread(), "client", None)
+            visible = int(res.valid.sum().item())
+            # nerfview renders each browser client from its own Renderer thread
+            # (has .client and the adaptive-quality state machine ._state).
+            worker = threading.current_thread()
+            client = getattr(worker, "client", None)
             cid = str(getattr(client, "client_id", "")) if client is not None else ""
             ev = RenderEvent(time.time(), cid, res.revision, W, H, tuple(cam.K.ravel()),
                              tuple(cam.T_world_camera.ravel()), res.render_ms, visible, opt.mode)
@@ -137,24 +142,24 @@ class ViewerRenderCallback:
                 self.count += 1
                 self.log.append(ev)
                 if self.keep_last:
-                    self.last = (cam, rgb_uint8(rgb), res.revision)
+                    self.last = (cam, rgb8, res.revision)
             if self.on_frame is not None:
                 self.on_frame(ev, res)
-            if not opt.occlude_overlays:
+            # Depth (for occluding overlays) costs a ~10 ms PNG encode in viser per
+            # frame. Send it only with nerfview's settled "high" frame (rendered
+            # ~0.2 s after the camera/scene stops changing); while moving, frames
+            # go out as JPEG only and overlays draw on top.
+            settled = getattr(worker, "_state", "high") == "high"
+            if not (opt.occlude_overlays and settled):
                 return img
-            d = np.nan_to_num(depth, nan=VISER_MAX_DEPTH).astype(np.float32)
-            return img, np.minimum(d, VISER_MAX_DEPTH)
+            d = torch.nan_to_num(res.depth, nan=VISER_MAX_DEPTH).clamp_max(VISER_MAX_DEPTH)
+            return img, d.cpu().numpy()
         except InterruptRenderException:
             raise
         except Exception as exc:  # surface, never let nerfview os._exit()
             msg = f"{type(exc).__name__}: {exc}"
-            try:
-                import torch
-
-                if isinstance(exc, torch.cuda.OutOfMemoryError):
-                    msg += " — CUDA OOM: lower 'Max resolution' in the Render panel"
-            except Exception:
-                pass
+            if isinstance(exc, torch.cuda.OutOfMemoryError):
+                msg += " — CUDA OOM: lower 'Max resolution' in the Render panel"
             if self.on_error is not None:
                 try:
                     self.on_error("render", exc, msg)
