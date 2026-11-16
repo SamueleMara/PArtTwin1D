@@ -1,0 +1,10 @@
+# Local 3DGS models, large artifacts, simulation outputs
+__pycache__/
+.pytest_cache/
+*.pyc
+outputs/
+assets/
+*.egg-info/
+*.mp4
+# Keep small test config / fixture URDF; generated PLYs are not tracked
+examples/hinged_box/*.ply

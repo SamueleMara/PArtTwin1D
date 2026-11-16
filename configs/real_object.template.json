@@ -1,0 +1,25 @@
+{
+  "urdf": "../assets/YOUR_OBJECT/model.urdf",
+  "fixed_base": true,
+  "T_world_root": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
+  "links": {
+    "base_link": {
+      "ply": "../assets/YOUR_OBJECT/base.ply",
+      "T_link_ply": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    },
+    "moving_link": {
+      "ply": "../assets/YOUR_OBJECT/moving.ply",
+      "T_link_ply": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    }
+  },
+  "cameras": [
+    {
+      "name": "calibrated_cam_000",
+      "width": 640,
+      "height": 480,
+      "K": [[600,0,320],[0,600,240],[0,0,1]],
+      "T_world_camera": [[1,0,0,0],[0,1,0,0],[0,0,1,1],[0,0,0,1]]
+    }
+  ],
+  "render": {"sh_degree": -1, "background_rgb": [1,1,1]}
+}

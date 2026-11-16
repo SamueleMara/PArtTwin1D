@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<robot name="smoke_door">
+ <link name="base_link"><inertial><mass value="5"/><origin xyz="0.25 0 0.33"/><inertia ixx="0.18" iyy="0.18" izz="0.1" ixy="0" ixz="0" iyz="0"/></inertial>
+  <collision><origin xyz="0 0 0.33"/><geometry><box size="0.04 0.04 0.68"/></geometry></collision>
+ </link>
+ <link name="door_link"><inertial><mass value="1"/><origin xyz="0.25 0 0.325"/><inertia ixx="0.04" iyy="0.04" izz="0.02" ixy="0" ixz="0" iyz="0"/></inertial>
+  <collision><origin xyz="0.25 0 0.325"/><geometry><box size="0.5 0.02 0.65"/></geometry></collision>
+ </link>
+ <joint name="door_hinge" type="revolute"><parent link="base_link"/><child link="door_link"/>
+  <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 0 1"/>
+  <limit lower="0" upper="1.57" effort="20" velocity="1.5"/><dynamics damping="0.1" friction="0.01"/>
+ </joint>
+</robot>

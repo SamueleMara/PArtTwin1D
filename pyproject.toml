@@ -1,0 +1,11 @@
+[build-system]
+requires=["setuptools>=64", "wheel"]
+build-backend="setuptools.build_meta"
+[project]
+name="parttwin-maniskill-gs-smoke"
+version="0.3.0"
+description="Minimal articulated URDF / per-link 3DGS smoke test for ManiSkill"
+requires-python=">=3.10"
+[tool.setuptools.packages.find]
+where=["."]
+include=["parttwin_smoke*"]
