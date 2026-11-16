@@ -1,0 +1,9 @@
+[submodule "third_party/ManiSkill"]
+	path = third_party/ManiSkill
+	url = https://github.com/mani-skill/ManiSkill.git
+[submodule "third_party/gsplat"]
+	path = third_party/gsplat
+	url = https://github.com/nerfstudio-project/gsplat.git
+[submodule "third_party/nerfview"]
+	path = third_party/nerfview
+	url = https://github.com/nerfstudio-project/nerfview.git
