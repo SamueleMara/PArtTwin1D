@@ -1,0 +1,9 @@
+# Use with a CUDA-enabled torch environment. Avoid reinstalling torch if already working.
+# Versions checked against the user's parttwin_sim installation on 2026-11-16.
+mani_skill==3.0.1
+gsplat==1.5.3
+plyfile>=1.0
+scipy>=1.10
+numpy>=1.24
+Pillow>=10
+pytest>=7

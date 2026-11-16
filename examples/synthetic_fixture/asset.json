@@ -1,0 +1,11 @@
+{
+  "urdf": "model.urdf",
+  "links": {
+    "base_link": {
+      "ply": "base.ply"
+    },
+    "door_link": {
+      "ply": "door.ply"
+    }
+  }
+}
