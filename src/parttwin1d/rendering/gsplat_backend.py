@@ -170,7 +170,7 @@ class ArticulatedGaussianRenderer:
             self._onehot = torch.nn.functional.one_hot(self.scene.link_ids, L).to(torch.float32)
         return self._onehot
 
-    def render_batch(self, cameras, *, segmentation: bool = False, sh_degree: int | None = None):
+    def render_batch(self, cameras, *, segmentation: bool = False, sh_degree: int | None = None, background=None):
         """Render C cameras sharing one resolution in a single rasterization call.
 
         Returns dict of GPU tensors: rgb [C,H,W,3], alpha [C,H,W], depth [C,H,W] (NaN invalid),
@@ -194,7 +194,8 @@ class ArticulatedGaussianRenderer:
             cam_pos = torch.as_tensor(np.stack([c.position for c in cameras]), dtype=torch.float32, device=self.device)
             colors = self.adapter.colors(cam_pos, deg)  # [C,N,3]
             C = len(cameras)
-            bg = self.background[None].expand(C, 3)
+            bgv = self.background if background is None else torch.as_tensor(background, dtype=torch.float32, device=self.device)
+            bg = bgv[None].expand(C, 3)
             if segmentation:
                 oh = self._link_onehot()[None].expand(C, -1, -1)
                 colors = torch.cat([colors, oh], dim=-1)
@@ -219,12 +220,14 @@ class ArticulatedGaussianRenderer:
                 res["link_id"] = lid.masked_fill(~valid, -1)
             return res
 
-    def render(self, camera: RenderCamera, *, segmentation: bool = False, sh_degree: int | None = None) -> RenderResult:
+    def render(self, camera: RenderCamera, *, segmentation: bool = False, sh_degree: int | None = None,
+               background=None) -> RenderResult:
+        """background=(0,0,0) yields premultiplied colour (used for compositing)."""
         import torch
 
         t0 = time.perf_counter()
         with self._lock:
-            out = self.render_batch([camera], segmentation=segmentation, sh_degree=sh_degree)
+            out = self.render_batch([camera], segmentation=segmentation, sh_degree=sh_degree, background=background)
             snap = self._snapshot
             torch.cuda.synchronize(self.device)
         ms = (time.perf_counter() - t0) * 1e3

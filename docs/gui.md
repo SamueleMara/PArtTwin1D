@@ -1,4 +1,69 @@
-# Live interactive 3D GUI
+# Live interactive 3D GUIs
+
+Two front-ends share the same `ArticulatedGaussianRenderer` and ManiSkill env:
+
+| | `parttwin maniskill-gui` (desktop) | `parttwin gui` (browser) |
+|---|---|---|
+| Window | **ManiSkill's own viewer** (`env._viewer`, `sapien.utils.Viewer`) | viser web page (nerfview @ 4538024) |
+| Gaussians ↔ camera | rendered from the SAPIEN viewer camera **in the same frame**, depth-composited with the SAPIEN scene → zero lag | streamed JPEG, ≈12 ms behind overlays |
+| SAPIEN scene | collision proxies, joint axes, SAPIEN Articulation / Transform / Scene windows | — |
+| Remote / headless | needs display + Vulkan | yes (SSH port forward) |
+| Physics backend | `physx_cpu` | `physx_cpu`, `physx_cuda` |
+| Calibrated cameras | pose + vertical FOV (exact K in exports) | exact-K panel + exports |
+
+## ManiSkill viewer (`parttwin maniskill-gui`)
+
+```bash
+python -m parttwin1d.cli.maniskill_gui --config configs/examples/hinged_box.yaml   # or: make maniskill-gui
+```
+
+How it is wired (`src/parttwin1d/viewer/maniskill_viewer.py`, `sapien_shader.py`):
+
+1. The env enables SAPIEN rendering and returns a viewer `CameraConfig` whose
+   `ShaderConfig.shader_pack` is a **generated** pack: the installed SAPIEN 3.0.3
+   `default` pack with only `composite0.frag` patched (two samplers
+   `samplerGaussianColor/Depth` + a depth test against the gbuffer). Cached in
+   `~/.cache/parttwin1d/sapien_shaders/`, regenerated if SAPIEN changes; the patch
+   fails loudly if SAPIEN's shader anchors move.
+2. The viewer is created exactly as ManiSkill's `render_human()` does
+   (`sapien_utils.create_viewer(env._viewer_camera_config)` + `env._setup_viewer()`),
+   then `GaussianLayerPlugin` is appended to `viewer.plugins`.
+3. Every frame, in `before_render` (after SAPIEN applied mouse input and synced
+   PhysX poses), the plugin converts the window camera (OpenGL model/projection →
+   OpenCV c2w and K), renders gsplat from it with a black background
+   (premultiplied colour), and uploads RGBA8 + float depth as textures; the
+   composite pass blends `g.rgb + (1-g.a)·scene` wherever the Gaussians are nearer
+   than SAPIEN geometry. Nothing is re-rendered while camera and state are unchanged.
+
+Controls: SAPIEN viewer mouse (right-drag rotate, middle/shift pan, wheel zoom) and
+its windows (the twin articulation is pre-selected, so SAPIEN's *Articulation*
+window sliders also drive the joints and the splats follow). The
+**PArtTwin1D Gaussian twin** window: show Gaussians, collision proxies (opaque;
+they hide the splats inside them), render scale, SH degree, joint sliders
+(kinematic set / dynamics PD target), sweep, kinematic/dynamics mode, run physics,
+joint-0 force, calibrated-camera pose, free camera, export (composited viewer
+frame + Gaussian layer + every calibrated camera with exact K + state).
+
+Measured (RTX 4070 Laptop, 960×720, `tests/gui/test_maniskill_viewer.py`):
+orbit **35 fps** with the layer re-rendered every frame (SAPIEN frame ≈12 ms,
+gsplat ≈7 ms — CUDA and Vulkan time-slice the GPU — readback ≈5 ms, texture
+upload ≈4 ms); gsplat depth vs SAPIEN's rasterized door proxy: median 8.5 mm
+(proxy face is 10 mm in front of the splat plane). Use `--render-scale 0.5–0.75`
+for higher frame rates on large real objects.
+
+Limitations: `physx_cpu` only; SAPIEN's `RenderWindow.set_intrinsic_parameters`
+produced an inconsistent projection in SAPIEN 3.0.3, so calibrated presets use
+pose + vertical FOV (centred principal point) — exact K stays in exports/web GUI.
+
+## Classical nerfstudio viewer
+
+Not integrated: `pip install nerfstudio` (1.1.5) would downgrade **gsplat
+1.5.3 → 1.4.0, numpy 2.4.6 → 1.26.4 and viser 1.1.1 → 0.2.7** (dry run), breaking
+the pinned stack, and its viewer expects a nerfstudio `Pipeline`. The browser GUI
+already runs on nerfview, the viewer core the nerfstudio project extracted for
+gsplat (same viser frontend and camera conventions).
+
+# Browser GUI (`parttwin gui`)
 
 ```bash
 conda activate parttwin_sim && cd ~/PArtTwin1D && source scripts/activate_sim.sh

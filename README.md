@@ -17,6 +17,9 @@ bash scripts/bootstrap_submodules.sh            # once: submodules + editable in
 source scripts/activate_sim.sh                  # every new shell
 python -m parttwin1d.cli.gui --config configs/examples/hinged_box.yaml --port 8080
 # open http://127.0.0.1:8080
+
+# or: Gaussians inside ManiSkill's own SAPIEN viewer (desktop window, zero-lag compositing)
+python -m parttwin1d.cli.maniskill_gui --config configs/examples/hinged_box.yaml
 ```
 
 Other commands (`parttwin <cmd>` is the same as `python -m parttwin1d.cli.<cmd>`):
@@ -31,7 +34,7 @@ PARTTWIN_RUN_GPU_TESTS=1 python -m pytest -v tests/integration   # real PhysX + 
 PARTTWIN_RUN_GUI_TESTS=1 python -m pytest -v tests/gui           # real browser (system Chrome)
 ```
 
-`make setup | doctor | test | test-gpu | gui | render | inspect | evidence` wrap the same.
+`make setup | doctor | test | test-gpu | gui | maniskill-gui | render | inspect | evidence` wrap the same.
 
 ## Layout
 

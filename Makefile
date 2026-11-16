@@ -4,7 +4,7 @@ CONFIG ?= configs/examples/hinged_box.yaml
 PORT ?= 8080
 ACT := source scripts/activate_sim.sh >/dev/null &&
 
-.PHONY: setup doctor test test-gpu gui render inspect lint evidence clean-outputs
+.PHONY: setup doctor test test-gpu gui maniskill-gui render inspect lint evidence clean-outputs
 
 setup:            ## submodules + editable --no-deps installs + gsplat JIT check
 	bash scripts/bootstrap_submodules.sh
@@ -20,6 +20,9 @@ test-gpu:         ## REAL PhysX + gsplat CUDA + browser GUI tests
 
 gui:              ## live interactive GUI on http://127.0.0.1:$(PORT)
 	bash scripts/run_gui.sh $(CONFIG) --port $(PORT)
+
+maniskill-gui:    ## Gaussians composited into ManiSkill's SAPIEN viewer (desktop window)
+	bash scripts/run_maniskill_gui.sh $(CONFIG)
 
 render:           ## offline kinematic sweep to outputs/hinged_box
 	$(ACT) python -m parttwin1d.cli.render --config $(CONFIG) --joint door_hinge \

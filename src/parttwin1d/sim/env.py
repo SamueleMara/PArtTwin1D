@@ -44,10 +44,13 @@ def _env_class():
         SUPPORTED_REWARD_MODES = ("none",)
         SUPPORTED_OBS_MODES = ("none", "state", "state_dict")
 
-        def __init__(self, *, twin_config, keep_visuals: bool = False, **kwargs):
+        def __init__(self, *, twin_config, keep_visuals: bool = False, collision_proxies: bool = False,
+                     viewer_options: dict | None = None, **kwargs):
             # Must be set before BaseEnv.__init__ (which calls _load_scene).
             self._twin_config = twin_config
             self._keep_visuals = keep_visuals
+            self._collision_proxies = collision_proxies
+            self._viewer_options = viewer_options or {}
             self.twin = None
             super().__init__(robot_uids="none", **kwargs)
 
@@ -63,6 +66,23 @@ def _env_class():
         @property
         def _default_human_render_camera_configs(self):
             return []
+
+        @property
+        def _default_viewer_camera_configs(self):
+            # ManiSkill's own viewer (render_human -> sapien_utils.create_viewer)
+            # takes its shader pack from this config; the Gaussian viewer passes
+            # the generated compositing pack (parttwin1d.viewer.sapien_shader).
+            from mani_skill.render.shaders import ShaderConfig
+            from mani_skill.sensors.camera import CameraConfig
+
+            o = self._viewer_options
+            if not o.get("shader_pack"):
+                return super()._default_viewer_camera_configs
+            return CameraConfig(
+                uid="viewer", pose=o.get("pose", sapien.Pose([0, 0, 1])), width=int(o.get("width", 1280)),
+                height=int(o.get("height", 800)), fov=float(o.get("fov", 1.0)), near=float(o.get("near", 0.01)),
+                far=float(o.get("far", 100.0)),
+                shader_config=ShaderConfig(shader_pack=str(o["shader_pack"]), texture_names={"Color": ["rgb"]}))
 
         @property
         def control_mode(self):
@@ -88,6 +108,8 @@ def _env_class():
             if not self._keep_visuals:
                 for lb in builder.link_builders:
                     lb.visual_records.clear()
+            if self._collision_proxies:
+                add_collision_proxy_visuals(builder)
             T = cfg.T_world_root
             builder.initial_pose = sapien.Pose(p=T[:3, 3].tolist(), q=quat_from_matrix(T[:3, :3]).tolist())
             self.twin = builder.build(name="parttwin_object", fix_root_link=cfg.fixed_base)
@@ -121,6 +143,37 @@ def _env_class():
     return ArticulatedTwinEnv
 
 
+PROXY_RGBA = (0.1, 0.75, 0.75, 1.0)
+
+
+def add_collision_proxy_visuals(articulation_builder) -> int:
+    """Mirror each primitive collision shape as a render shape (debug proxy).
+
+    Proxies make links visible/selectable in the SAPIEN viewer (needed for its
+    ArticulationWindow). They are hidden by default by the Gaussian viewer, since
+    opaque proxies would occlude the splats inside them. Mesh collisions are
+    added from file at their collision scale.
+    """
+    mat = PROXY_RGBA  # SAPIEN builders accept an RGBA tuple as material
+    n = 0
+    for lb in articulation_builder.link_builders:
+        for r in list(lb.collision_records):
+            if r.type == "box":
+                lb.add_box_visual(pose=r.pose, half_size=r.scale, material=mat)
+            elif r.type == "sphere":
+                lb.add_sphere_visual(pose=r.pose, radius=r.radius, material=mat)
+            elif r.type == "capsule":
+                lb.add_capsule_visual(pose=r.pose, radius=r.radius, half_length=r.length, material=mat)
+            elif r.type == "cylinder":
+                lb.add_cylinder_visual(pose=r.pose, radius=r.radius, half_length=r.length, material=mat)
+            elif r.filename:
+                lb.add_visual_from_file(r.filename, pose=r.pose, scale=r.scale, material=mat)
+            else:
+                continue
+            n += 1
+    return n
+
+
 def initial_qpos(articulation, initial_q: dict):
     """q0 per active joint: configured value, else 0 clipped into the limits."""
     import torch
@@ -140,14 +193,22 @@ def initial_qpos(articulation, initial_q: dict):
     return q
 
 
-def create_env(cfg, sim_backend: str | None = None, obs_mode: str = "state_dict", keep_visuals: bool = False):
-    """Construct the robot-free scene (num_envs=1). Physics only, no SAPIEN rendering."""
+def create_env(cfg, sim_backend: str | None = None, obs_mode: str = "state_dict", keep_visuals: bool = False,
+               *, render_backend: str = "none", render_mode: str | None = None, collision_proxies: bool = False,
+               viewer_options: dict | None = None):
+    """Construct the robot-free scene (num_envs=1).
+
+    Default: physics only (``render_backend="none"``), appearance comes from gsplat.
+    The ManiSkill/SAPIEN viewer mode passes ``render_backend="gpu"``,
+    ``render_mode="human"`` and the compositing shader pack in ``viewer_options``.
+    """
     backend = sim_backend or cfg.sim.backend
     if backend not in ("physx_cpu", "physx_cuda"):
         raise ValueError("sim_backend must be 'physx_cpu' or 'physx_cuda'")
     cls = _env_class()
-    return cls(twin_config=cfg, keep_visuals=keep_visuals, num_envs=1, sim_backend=backend,
-               render_backend="none", obs_mode=obs_mode, reward_mode="none", render_mode=None)
+    return cls(twin_config=cfg, keep_visuals=keep_visuals, collision_proxies=collision_proxies,
+               viewer_options=viewer_options, num_envs=1, sim_backend=backend, render_backend=render_backend,
+               obs_mode=obs_mode, reward_mode="none", render_mode=render_mode)
 
 
 # Backwards-compatible name used by the pre-refactor scripts.
